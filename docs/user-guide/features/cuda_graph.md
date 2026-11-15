@@ -212,7 +212,8 @@ graphs to be used on MoE models as well:
 - `--cuda-graph-warmup-steps` (default: 3) controls how many warmup steps run before CUDA graph
   capture. Setting it to 0 is not recommended: some operations rely on the first few iterations
   for lazy initialization or autotuning, and capturing too early may produce incorrect or
-  suboptimal graphs.
+  suboptimal graphs. An inference graph (serving or RL rollout) runs at most one of these steps
+  before its capture, and two with GTP weight rematerialisation.
 - Inference CUDA graphs (serving or RL rollout) currently require
   `--cuda-graph-impl local`. Use `--inference-cuda-graph-scope layer|block` with
   `local`; all other implementations must set `--inference-cuda-graph-scope none`,

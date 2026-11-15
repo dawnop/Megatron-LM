@@ -13,6 +13,7 @@ import megatron.core.transformer.cuda_graphs as cuda_graphs_module
 from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
 from megatron.core.enums import ModelType
 from megatron.core.extensions.transformer_engine import TEDotProductAttention
+from megatron.core.inference.contexts.static_context import StaticInferenceContext
 from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
     get_gpt_layer_with_transformer_engine_spec,
@@ -2615,6 +2616,36 @@ class TestInlineCaptureManager:
         assert (
             runner.num_warmup_steps == 0
         ), f"Expected 0 warmup steps (manager override), got {runner.num_warmup_steps}"
+
+    @torch.inference_mode()
+    def test_inference_capture_warms_up_once(self):
+        """Only a forward that carries an inference context is captured after one warmup step:
+        another runner of the same manager, and an inline capture, keep the configured count."""
+
+        class _ContextModule(_SimpleModule):
+            def forward(self, x, inference_context=None):
+                return self.my_op(x)
+
+        config = self._make_config()
+        config.cuda_graph_warmup_steps = 3
+        module = _ContextModule(config).cuda().eval()
+        x = torch.randn(4, config.hidden_size, device="cuda")
+
+        mgr = CudaGraphManager(config, need_backward=False)
+        context = StaticInferenceContext(max_batch_size=4, max_sequence_length=8)
+        mgr(module, (x,), {"inference_context": context})
+        assert mgr.cudagraph_runners[0].num_warmup_steps == 1
+        assert mgr.get_cudagraph_runner(module, (x,), {}, True).num_warmup_steps == 3
+
+        inline_mgr = CudaGraphManager(
+            config,
+            base_module=module,
+            function_name="my_op",
+            inline_capture=True,
+            need_backward=False,
+        )
+        module.my_op(x, cache_key="test")
+        assert inline_mgr.cudagraph_runners[0].num_warmup_steps == 3
 
 
 class TestSkipFp8WeightUpdateTensor:

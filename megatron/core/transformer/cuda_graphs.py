@@ -110,6 +110,7 @@ except:
 
 _IS_GRAPH_CAPTURING = False
 _IS_GRAPH_WARMUP = False
+GTP_REMAT_MIN_WARMUP_STEPS = 2
 _CUDA_GRAPH_STREAM_POOL_SIZE = 3
 _CUDA_GRAPH_STREAM_POOLS = None
 _CUDA_GRAPH_STREAM_NEXT_SLOT = 0
@@ -1166,7 +1167,7 @@ class _CudaGraphRunner(torch.nn.Module):
             if self.gtp_remat:
                 # Ensure internal warmup (inside create_fwd_graph) has >= 2 steps
                 # for GTP: 1st builds chain + tickets, 2nd exercises prefetch path.
-                self.num_warmup_steps = max(self.num_warmup_steps, 2)
+                self.num_warmup_steps = max(self.num_warmup_steps, GTP_REMAT_MIN_WARMUP_STEPS)
 
                 self.use_stream = True
                 self.stream = _get_cuda_graph_stream()
@@ -2256,6 +2257,14 @@ class CudaGraphManager(torch.nn.Module):
                             # No match found for previous layer, continue with no buffer reuse
                             pass
 
+                    # A forward that carries an inference context is the inference engine's
+                    # capture, one graph per batch shape. One eager forward before it is
+                    # enough (two with GTP weight rematerialisation).
+                    if is_inference_mode and self._num_warmup_steps is None:
+                        runner.num_warmup_steps = min(
+                            runner.num_warmup_steps,
+                            GTP_REMAT_MIN_WARMUP_STEPS if runner.gtp_remat else 1,
+                        )
                     runner.create_fwd_graph(
                         local_args, local_kwargs, outputs=None, clone_inputs=runner.is_first_layer
                     )
